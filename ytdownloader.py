@@ -13,7 +13,6 @@ def get_available_qualities(url):
                 if height:
                     key = f"{height}p"
                     qualities[key] = height
-        # Always add best/worst
         qualities['best'] = None
         qualities['worst'] = None
         print("\nAvailable video qualities for this video:")
@@ -75,7 +74,12 @@ if __name__ == "__main__":
     qualities, subtitles = get_available_qualities(url)
     print("\nChoose a quality from above (e.g., 360p, 720p, best, worst):")
     user_quality = input("Enter quality: ").lower()
-    quality = user_quality if user_quality in qualities else 'best'
+    if user_quality in qualities:
+        quality = user_quality
+    elif user_quality.isdigit() and f"{user_quality}p" in qualities:
+        quality = f"{user_quality}p"
+    else:
+        quality = 'best'
     sub = False
     lang = 'en'
     if subtitles:
