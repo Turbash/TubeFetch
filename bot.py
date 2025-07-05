@@ -2,6 +2,7 @@ from ytdownloader import download_youtube_video
 import os
 import discord
 from discord.ext import commands
+from discord import app_commands
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -10,24 +11,32 @@ TOKEN = os.getenv('TOKEN')
 intents = discord.Intents.default()
 intents.message_content = True
 
-bot = commands.Bot(command_prefix='!', intents=intents)
+class TubeFetchBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=intents)
+
+    async def setup_hook(self):
+        await self.tree.sync()
+
+bot = TubeFetchBot()
 
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user.name} - {bot.user.id}')
 
-@bot.command()
-async def fetch(ctx, url:str):
-    await ctx.send("Downloading video, please wait...")
+@bot.tree.command(name="fetch", description="Download a YouTube video and upload it here")
+@app_commands.describe(url="The YouTube video URL")
+async def fetch(interaction: discord.Interaction, url: str):
+    await interaction.response.send_message("Downloading video, please wait...", ephemeral=True)
     filename = download_youtube_video(url)
     if filename:
         try:
-            await ctx.send(file=discord.File(filename))
+            await interaction.followup.send(file=discord.File(filename))
         except Exception as e:
-            await ctx.send(f"Failed to send the file: {e}")
+            await interaction.followup.send(f"Failed to send the file: {e}")
         finally:
             os.remove(filename)
     else:
-        await ctx.send("Failed to download the video. Please check the URL and try again.")
+        await interaction.followup.send("Failed to download the video. Please check the URL and try again.")
 
 bot.run(TOKEN)
