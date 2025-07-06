@@ -10,10 +10,23 @@ import asyncio
 import urllib.parse
 
 def upload_to_transfersh(filepath):
+    import shutil
+    import string
+    import tempfile
     try:
-        safe_name = urllib.parse.quote(os.path.basename(filepath))
-        with open(filepath, 'rb') as f:
+        valid_chars = f"-_.() {string.ascii_letters}{string.digits}"
+        dirname, filename = os.path.split(filepath)
+        safe_filename = ''.join(c if c in valid_chars else '_' for c in filename)
+        temp_path = os.path.join(tempfile.gettempdir(), safe_filename)
+        if temp_path != filepath:
+            shutil.copy(filepath, temp_path)
+        else:
+            temp_path = filepath
+        safe_name = urllib.parse.quote(os.path.basename(temp_path))
+        with open(temp_path, 'rb') as f:
             response = requests.put(f'https://transfer.sh/{safe_name}', data=f)
+        if temp_path != filepath and os.path.exists(temp_path):
+            os.remove(temp_path)
         if response.status_code == 200:
             return response.text.strip()
         else:
@@ -21,7 +34,7 @@ def upload_to_transfersh(filepath):
             return None
     except Exception as e:
         print(f"transfer.sh upload exception: {e}")
-        return None   
+        return None
 
 load_dotenv()
 TOKEN = os.getenv('TOKEN')
@@ -120,7 +133,7 @@ async def fetch(
 ):
     await interaction.response.send_message(f"Downloading video at {quality} quality, please wait...", ephemeral=True)
     loop = asyncio.get_running_loop()
-
+    files_to_delete = []
     try:
         qualities, _ = await loop.run_in_executor(None, get_available_qualities, url)
         user_quality = quality.lower()
@@ -135,43 +148,46 @@ async def fetch(
         print(f"DEBUG: download_youtube_video returned filename: {filename}")
         print(f"DEBUG: os.path.exists({filename}): {os.path.exists(filename) if filename else 'N/A'}")
 
-        files_to_delete = []
-        files_to_send = []
         if filename and os.path.exists(filename):
             files_to_delete.append(filename)
             file_size = os.path.getsize(filename)
-            if file_size < 25 * 1024 * 1024:
-                files_to_send.append(discord.File(filename))
-                if subtitles:
-                    base, _ = os.path.splitext(filename)
-                    for ext in [f".{language}.vtt", f".{language}.srt"]:
-                        subfile = f"{base}{ext}"
-                        if os.path.exists(subfile):
-                            files_to_send.append(discord.File(subfile))
-                            files_to_delete.append(subfile)
-                            break
-                try:
+            subtitle_file = None
+            if subtitles:
+                base, _ = os.path.splitext(filename)
+                for ext in [f".{language}.vtt", f".{language}.srt"]:
+                    subfile = f"{base}{ext}"
+                    if os.path.exists(subfile):
+                        subtitle_file = subfile
+                        files_to_delete.append(subfile)
+                        break
+            try:
+                if file_size < 25 * 1024 * 1024:
+                    files_to_send = [discord.File(filename)]
+                    if subtitle_file:
+                        files_to_send.append(discord.File(subtitle_file))
                     await interaction.followup.send(files=files_to_send)
-                except Exception:
-                    await interaction.followup.send("Video was downloaded but could not be sent. The file has been deleted from the server.")
-                finally:
-                    for f in files_to_delete:
-                        if os.path.exists(f):
-                            os.remove(f)
-            else:
-                link = await loop.run_in_executor(None, upload_to_transfersh, filename)
+                else:
+                    link = await loop.run_in_executor(None, upload_to_transfersh, filename)
+                    if link and link.startswith("https://"):
+                        await interaction.followup.send(f"Video is too large for Discord. Download it here (valid for 14 days): {link}")
+                    else:
+                        await interaction.followup.send("Video is too large and upload to transfer.sh failed. Please try again later or contact the bot admin.")
+            except Exception:
+                await interaction.followup.send("Video was downloaded but could not be sent. The file has been deleted from the server.")
+            finally:
                 for f in files_to_delete:
                     if os.path.exists(f):
                         os.remove(f)
-                if link and link.startswith("https://"):
-                    await interaction.followup.send(f"Video is too large for Discord. Download it here (valid for 14 days): {link}")
-                else:
-                    await interaction.followup.send("Video is too large and upload to transfer.sh failed. Please try again later or contact the bot admin.")
         else:
             await interaction.followup.send(
                 f"Failed to download the video. Please check the URL, quality, or subtitle language.\n"
                 f"DEBUG: filename={filename}, exists={os.path.exists(filename) if filename else 'N/A'}"
-            )               
+            )
     except Exception as e:
         await interaction.followup.send("An unexpected error occurred. Please try again or contact the bot admin.")
+    finally:
+        # Always try to clean up files, even on error
+        for f in files_to_delete:
+            if os.path.exists(f):
+                os.remove(f)
 bot.run(TOKEN)
