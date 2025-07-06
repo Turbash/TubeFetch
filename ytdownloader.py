@@ -35,13 +35,13 @@ def get_format_string(quality):
         return f"bestvideo[height={height}]+bestaudio/best[height={height}]/best[height={height}]"
     else:
         return "bestvideo+bestaudio/best"
-
 def download_youtube_video(
     url,
     quality='best',
     subtitles=False,
     subtitle_lang='en'
 ):
+    import time
     ydl_opts = {
         'outtmpl': '%(title)s.%(ext)s',
         'format': get_format_string(quality),
@@ -52,23 +52,42 @@ def download_youtube_video(
         ydl_opts['subtitlesformat'] = 'best'
 
     try:
+        before = set(os.listdir('.'))
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             title = info.get('title', 'downloaded_video')
-            for ext in ['mp4', 'webm', 'mkv']:
-                video_filename = f"{title}.{ext}"
-                if os.path.exists(video_filename):
-                    if subtitles:
-                        subtitle_filename = f"{title}.{subtitle_lang}.vtt"
-                        if not os.path.exists(subtitle_filename):
-                            subtitle_filename = f"{title}.{subtitle_lang}.srt"
-                        if subtitle_filename and os.path.exists(subtitle_filename):
-                            print(f"Subtitles downloaded: {subtitle_filename}")
-                    return video_filename
+            ext = info.get('ext', None)
+            # 1. Try yt-dlp's prepare_filename with ext
+            base_filename = ydl.prepare_filename(info)
+            if ext:
+                merged_filename = os.path.splitext(base_filename)[0] + f".{ext}"
+                if os.path.exists(merged_filename):
+                    return os.path.abspath(merged_filename)
+            # 2. Try base_filename itself
+            if os.path.exists(base_filename):
+                return os.path.abspath(base_filename)
+            # 3. Try any new file created after download started
+            after = set(os.listdir('.'))
+            new_files = list(after - before)
+            if new_files:
+                # Pick the newest file that matches the title
+                candidates = [f for f in new_files if title in f]
+                if candidates:
+                    newest = max(candidates, key=os.path.getmtime)
+                    return os.path.abspath(newest)
+                # Fallback: just return the newest file
+                newest = max(new_files, key=os.path.getmtime)
+                return os.path.abspath(newest)
+            # 4. Fallback: return the most recently modified video file
+            video_exts = ('.mp4', '.webm', '.mkv')
+            video_files = [f for f in os.listdir('.') if f.endswith(video_exts)]
+            if video_files:
+                newest = max(video_files, key=os.path.getmtime)
+                return os.path.abspath(newest)
     except yt_dlp.utils.DownloadError as e:
         print(f"Download error: {e}")
     return None
-
+    
 if __name__ == "__main__":
     url = input("Enter YouTube URL: ")
     qualities, subtitles = get_available_qualities(url)
