@@ -1,6 +1,69 @@
 import yt_dlp
 import os
 
+def get_video_info_with_sizes(url):
+    """Get video info including file sizes for different qualities"""
+    ydl_opts = {}
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        formats = info.get('formats', [])
+        
+        # Build quality info with file sizes
+        quality_info = {}
+        
+        print(f"DEBUG: Found {len(formats)} formats")
+        
+        for f in formats:
+            if f.get('vcodec', 'none') != 'none':  # Has video
+                height = f.get('height')
+                filesize = f.get('filesize') or f.get('filesize_approx')
+                format_id = f.get('format_id')
+                
+                print(f"DEBUG: Format {format_id}: {height}p, size: {filesize}")
+                
+                if height and filesize:
+                    quality_key = f"{height}p"
+                    # Convert to MB
+                    size_mb = filesize / (1024 * 1024)
+                    
+                    # Keep track of the smallest file size for each quality
+                    if quality_key not in quality_info or size_mb < quality_info[quality_key]['size_mb']:
+                        quality_info[quality_key] = {
+                            'size_mb': size_mb,
+                            'format_id': f.get('format_id'),
+                            'height': height
+                        }
+                        print(f"DEBUG: Updated {quality_key}: {size_mb:.1f}MB")
+        
+        # Add best/worst options (these won't have size info)
+        quality_info['best'] = None
+        quality_info['worst'] = None
+        
+        print(f"DEBUG: Final quality_info: {quality_info}")
+        
+        subtitles = info.get('subtitles', {})
+        return quality_info, subtitles, info.get('title', 'Unknown')
+
+def find_best_quality_for_size_limit(quality_info, max_size_mb=500):
+    """Find the best quality that fits within the size limit"""
+    # Filter qualities that fit within the limit
+    valid_qualities = []
+    
+    for quality, info in quality_info.items():
+        if quality in ['best', 'worst']:
+            continue
+        if info and info['size_mb'] <= max_size_mb:
+            valid_qualities.append((quality, info['height'], info['size_mb']))
+    
+    if not valid_qualities:
+        return None, None  # No quality fits the limit
+    
+    # Sort by height (descending) to get the best quality that fits
+    valid_qualities.sort(key=lambda x: x[1], reverse=True)
+    best_quality, height, size_mb = valid_qualities[0]
+    
+    return best_quality, size_mb
+
 def get_available_qualities(url):
     ydl_opts = {}
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
