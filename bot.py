@@ -4,141 +4,53 @@ from discord.ext import commands
 from discord import app_commands
 from dotenv import load_dotenv
 from ytdownloader import get_available_qualities, download_youtube_video, get_video_info_with_sizes, find_best_quality_for_size_limit
-import requests
 import asyncio
-
+from mega import Mega
 import urllib.parse
-
-def upload_to_gofile(filepath):
-    """Upload to gofile.io with API token for better limits and permanent storage"""
-    try:
-        print(f"DEBUG: Uploading to gofile.io: {filepath}")
-        
-        file_size_mb = os.path.getsize(filepath) / (1024 * 1024)
-        print(f"DEBUG: File size for upload: {file_size_mb:.1f}MB")
-        
-        # Longer timeout for larger files
-        timeout = max(600, int(600 + (file_size_mb / 100) * 60))
-        print(f"DEBUG: Using timeout: {timeout} seconds")
-        
-        upload_url = "https://upload.gofile.io/uploadfile"
-        
-        # Prepare headers and data for API token
-        headers = {}
-        data = {}
-        
-        if GOFILE_API_TOKEN:
-            headers['Authorization'] = f'Bearer {GOFILE_API_TOKEN}'
-            print("DEBUG: Using GoFile API token for permanent storage")
-            # With API token, we can specify additional options
-        else:
-            print("DEBUG: Using GoFile without token (guest upload)")
-        
-        with open(filepath, 'rb') as f:
-            files = {'file': f}
-            response = requests.post(
-                upload_url, 
-                files=files,
-                data=data,
-                headers=headers,
-                timeout=timeout,
-                stream=True 
-            )
-        
-        print(f"DEBUG: gofile.io response status: {response.status_code}")
-        print(f"DEBUG: gofile.io response: {response.text}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('status') == 'ok':
-                download_page = data['data']['downloadPage']
-                print(f"DEBUG: gofile.io upload successful: {download_page}")
-                return download_page
-        
-        print(f"DEBUG: gofile.io upload failed: {response.text}")
-        return None
-        
-    except Exception as e:
-        print(f"gofile.io upload exception: {e}")
-        return None
-
-def upload_to_fileio_fallback(filepath):
-    """Simple file.io upload as fallback (no API token)"""
-    try:
-        print(f"DEBUG: Trying file.io fallback for {filepath}")
-        
-        with open(filepath, 'rb') as f:
-            files = {'file': f}
-            data = {
-                'expires': '14d',  # 14 days for free
-                'maxDownloads': '100',  # Lower limit for free
-                'autoDelete': 'true'
-            }
-            response = requests.post(
-                'https://file.io/',
-                files=files,
-                data=data,
-                timeout=300
-            )
-        
-        print(f"DEBUG: file.io response status: {response.status_code}")
-        print(f"DEBUG: file.io response: {response.text}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('success'):
-                link = data.get('link')
-                print(f"DEBUG: file.io upload successful: {link}")
-                return link
-        print(f"DEBUG: file.io upload failed: {response.text}")
-        return None
-    except Exception as e:
-        print(f"file.io upload exception: {e}")
-        return None
-
-def upload_large_file(filepath):
-    """Upload large file with GoFile API token - much higher limits"""
-    file_size = os.path.getsize(filepath)
-    file_size_mb = file_size / (1024 * 1024)
-    
-    print(f"DEBUG: File size: {file_size_mb:.1f}MB")
-    
-    # GoFile with API token has much higher limits (5GB+)
-    MAX_UPLOAD_SIZE_MB = 2000 if GOFILE_API_TOKEN else 500  # 2GB with token, 500MB without
-    
-    if file_size_mb > MAX_UPLOAD_SIZE_MB:
-        print(f"DEBUG: File too large: {file_size_mb:.1f}MB > {MAX_UPLOAD_SIZE_MB}MB")
-        return None, f"File too large ({file_size_mb:.1f}MB). Max size: {MAX_UPLOAD_SIZE_MB}MB. Try a lower quality."
-    
-    # Try GoFile first (higher limits with API token)
-    link = upload_to_gofile(filepath)
-    if link:
-        if GOFILE_API_TOKEN:
-            return link, "GoFile.io with API (permanent)"
-        else:
-            return link, "GoFile.io (10 days)"
-    
-    # Fallback to file.io for smaller files
-    if file_size_mb <= 100:  
-        link = upload_to_fileio_fallback(filepath)
-        if link:
-            return link, "file.io (14 days)"
-    
-    return None, "Upload failed - try a lower quality."
 
 load_dotenv()
 TOKEN = os.getenv('TOKEN')
-GOFILE_API_TOKEN = os.getenv('API_TOKEN')  # GoFile.io API token
+MEGA_EMAIL = os.getenv('MEGA_EMAIL')
+MEGA_PASSWORD = os.getenv('MEGA_PASSWORD')
+
+def upload_to_mega(filepath):
+    """Upload to MEGA with credentials - no size limits, permanent storage"""
+    try:
+        print(f"DEBUG: Uploading to MEGA: {filepath}")
+        
+        file_size_mb = os.path.getsize(filepath) / (1024 * 1024)
+        print(f"DEBUG: File size for MEGA upload: {file_size_mb:.1f}MB")
+        
+        mega = Mega()
+        m = mega.login(MEGA_EMAIL, MEGA_PASSWORD)
+        
+        file_handle = m.upload(filepath)
+        
+        link = m.get_upload_link(file_handle)
+        
+        print(f"DEBUG: MEGA upload successful: {link}")
+        return link
+        
+    except Exception as e:
+        print(f"MEGA upload exception: {e}")
+        return None
+
+# Bot setup
 
 intents = discord.Intents.default()
 intents.message_content = True
 
 class TubeFetchBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix="!", intents=intents)
+        super().__init__(command_prefix="tubefetch!", intents=intents)
 
     async def setup_hook(self):
         await self.tree.sync()
+    
+    async def on_command_error(self, ctx, error):
+        if isinstance(error, commands.CommandNotFound):
+            return
+        raise error
 
 bot = TubeFetchBot()
 
@@ -175,7 +87,7 @@ async def help_command(interaction: discord.Interaction):
         "• `/help`\n"
         " Show this help message.\n"
         "\n"
-        "• **Note:** If the video is too large for Discord, you'll get a temporary download link."
+        "• **Note:** If the video is too large for Discord, you'll get a MEGA download link (permanent)."
     )
     await interaction.response.send_message(help_text, ephemeral=True)
 
@@ -245,27 +157,12 @@ async def fetch(
             quality = 'best'
         
         MAX_DISCORD_MB = 25
-        MAX_UPLOAD_MB = 2000 if GOFILE_API_TOKEN else 500  # 2GB with GoFile API token
         
-        if requested_size_mb:
-            if requested_size_mb > MAX_UPLOAD_MB:
-                best_quality, best_size = await loop.run_in_executor(None, find_best_quality_for_size_limit, quality_info, MAX_UPLOAD_MB)
-                if best_quality:
-                    await interaction.followup.send(
-                        f"⚠️ Requested quality ({user_quality}) would be {requested_size_mb:.1f}MB (too large for hosting).\n"
-                        f"🔄 Automatically using {best_quality} instead ({best_size:.1f}MB)."
-                    )
-                    quality = best_quality
-                else:
-                    await interaction.followup.send(
-                        f"❌ Video is too large in all available qualities. Even the smallest quality exceeds {MAX_UPLOAD_MB}MB limit."
-                    )
-                    return
-            elif requested_size_mb > MAX_DISCORD_MB:
-                await interaction.followup.send(
-                    f"📹 Video will be {requested_size_mb:.1f}MB - too large for Discord.\n"
-                    f"☁️ Will upload to cloud storage after download."
-                )
+        if requested_size_mb and requested_size_mb > MAX_DISCORD_MB:
+            await interaction.followup.send(
+                f"📹 Video will be {requested_size_mb:.1f}MB - too large for Discord.\n"
+                f"☁️ Will upload to MEGA after download."
+            )
 
         await interaction.followup.send(f"⬬ Downloading '{video_title}' at {quality} quality...")
         filename = await loop.run_in_executor(None, download_youtube_video, url, quality, subtitles, language)
@@ -291,13 +188,12 @@ async def fetch(
                         files_to_send.append(discord.File(subtitle_file))
                     await interaction.followup.send(files=files_to_send)
                 else:
-                    await interaction.followup.send("Video is large, uploading to cloud storage...")
-                    upload_result = await loop.run_in_executor(None, upload_large_file, filename)
-                    link, service = upload_result
+                    await interaction.followup.send("Video is large, uploading to MEGA...")
+                    link = await loop.run_in_executor(None, upload_to_mega, filename)
                     if link:
-                        await interaction.followup.send(f"Video is too large for Discord. Download it here: {link}\n(Hosted on {service})")
+                        await interaction.followup.send(f"Video is too large for Discord. Download it here: {link}\n(Hosted on MEGA - permanent)")
                     else:
-                        await interaction.followup.send(f"Upload failed: {service}")
+                        await interaction.followup.send("Upload failed")
             except Exception:
                 await interaction.followup.send("Video was downloaded but could not be sent. The file has been deleted from the server.")
             finally:

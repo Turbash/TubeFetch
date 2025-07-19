@@ -1,4 +1,4 @@
 discord
 python-dotenv
 yt-dlp
-requests
+mega.py==1.0.8
